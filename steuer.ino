@@ -41,6 +41,7 @@
 #define Z1 26
 #define Z2 171
 #define MagnetPairs 5
+#define TacPerErev 6 //constant of the vesc, three states going through two magnets (one pole pair)
 
 //Makes ESP go silent if there is no communication instead of beeping forever and shutting everything off. Useful for testing with vesc tool.
 #define DEBUG (1)
@@ -102,8 +103,8 @@ void storeValues(){
 
     const int msgLen = 9;
 
-    uint16_t km = constrain((long)UART.data.tachometer/3*100/erotPerKm, 0, 0xFFFF);
-    uint16_t kmabs = constrain((long)UART.data.tachometer/3/erotPerKm, 0, 0xFFFF);
+    uint16_t km = constrain((long)UART.data.tachometer/TacPerErev*100/erotPerKm, 0, 0xFFFF);
+    uint16_t kmabs = constrain((long)UART.data.tachometer/TacPerErev/erotPerKm, 0, 0xFFFF);
 
     uint8_t msg[msgLen+1] = {
             constrain(abs(UART.data.avgInputCurrent), 0, 255),

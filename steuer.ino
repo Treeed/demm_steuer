@@ -14,6 +14,7 @@
 */
 #include <Wire.h>
 #include "vesc_uart/VescUart.h"
+#include "soc/i2c_struct.h"
 
 //PINS
 #define FIELDCOIL_PIN 32
@@ -106,9 +107,12 @@ void storeValues(){
     uint16_t km = constrain((long)UART.data.tachometer/TacPerErev*100/erotPerKm, 0, 0xFFFF);
     uint16_t kmabs = constrain((long)UART.data.tachometer/TacPerErev/erotPerKm, 0, 0xFFFF);
 
+    static uint8_t tt = 0;
+    tt++;
+
     uint8_t msg[msgLen+1] = {
             constrain(abs(UART.data.avgInputCurrent), 0, 255),
-            km,
+            tt,
             km >> 8,
             constrain((UART.data.ampHours*AhFactor), 0, 255),
             kmabs,
@@ -123,7 +127,34 @@ void storeValues(){
         msg[msgLen] += msg[i];
     }
 
-    Wire.slaveWrite(msg, sizeof(msg));
+    static int busBusyCycles = 0;
+    if(I2C0.status_reg.scl_main_state_last == 4){
+        Serial.println(4);
+        Serial.println(busBusyCycles);
+        Serial.println(I2C0.status_reg.bus_busy);
+        Serial.println(Wire.slaveWrite(msg, sizeof(msg)));
+        if(busBusyCycles > 10){
+            I2C0.command.opcode = 3;
+            I2C0.command.opcode = 4;
+//      Wire.end();
+//      Wire.begin(I2C_ADDRESS, SDA_PIN, SCL_PIN, 400000L);
+        }
+        busBusyCycles++;
+
+    }
+    else{
+        busBusyCycles = 0;}
+    if(!Wire.slaveWrite(msg, sizeof(msg)) && I2C0.status_reg.bus_busy){
+        Serial.println("slavewrite is broken");
+        I2C0.command.opcode = 3;
+        I2C0.command.opcode = 4;
+//      Wire.end();
+//      Wire.begin(I2C_ADDRESS, SDA_PIN, SCL_PIN, 400000L);
+        if(!Wire.slaveWrite(msg, sizeof(msg))){
+            Serial.println("slavewrite is broken");
+        }
+    }
+
 }
 
 
@@ -213,10 +244,12 @@ void loop() {
         else {
             SetGas();
         }
+        Serial.println("gedding");
         if (UART.getVescValues()) {
             lastValues = millis();
-
+            Serial.println("stor");
             storeValues();
+            Serial.println("stord");
 
             if (UART.data.inpVoltage < BATTERY_CELLS * LOW_VOLTAGE) {
                 digitalWrite(BEEPER_PIN, HIGH);
@@ -226,7 +259,7 @@ void loop() {
         }
     }
 
-    if(millis()-lastValues > 10000){
+    if(0){//millis()-lastValues > 10000){
         digitalWrite(BEEPER_PIN, HIGH);
         if(!DEBUG){
             digitalWrite(RELAIS_PIN, LOW);

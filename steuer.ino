@@ -51,6 +51,7 @@
 
 const float WHEEL_CIR = 1.66; //m
 const float LOW_VOLTAGE = 3.5;
+const float PRE_CHARGE_DROPOFF = 2; // when charging the capacitors through the resistor the voltage should at least reach the minimum voltage minus this value
 unsigned long previousMillisFault = 0;
 unsigned long previousMillisPrint = 0;
 unsigned long previousMillisCycle = 0;
@@ -88,6 +89,24 @@ void setup() {
     UART.setSerialPort(&Serial2);
     digitalWrite(BEEPER_PIN, HIGH);
     delay(3);
+    digitalWrite(BEEPER_PIN, LOW);
+
+    Serial.println("waiting for vesc comm");
+    while (!UART.getVescValues()) {
+        delay(100);
+    }
+
+    Serial.println("waiting for pre charge voltage");
+    while (UART.data.inpVoltage < BATTERY_CELLS * LOW_VOLTAGE - PRE_CHARGE_DROPOFF) {
+        UART.getVescValues();
+        delay(100);
+    }
+    Serial.println("turning on");
+
+    digitalWrite(RELAIS_PIN, HIGH);
+
+    digitalWrite(BEEPER_PIN, HIGH);
+    delay(6);
     digitalWrite(BEEPER_PIN, LOW);
 
     Wire.onRequest(storeValues);

@@ -14,6 +14,10 @@
 */
 #include <Wire.h>
 #include "vesc_uart/VescUart.h"
+#include "soc/i2c_struct.h"
+#include "soc/dport_reg.h"
+#include "soc/i2c_reg.h"
+#include "esp32-hal-i2c.h"
 
 //PINS
 #define FIELDCOIL_PIN 32
@@ -44,7 +48,7 @@
 #define TacPerErev 6 //constant of the vesc, three states going through two magnets (one pole pair)
 
 //Makes ESP go silent if there is no communication instead of beeping forever and shutting everything off. Useful for testing with vesc tool.
-#define DEBUG (1)
+#define DEBUG (0)
 
 #define I2C_ADDRESS 8
 
@@ -64,7 +68,10 @@ float distance = 0;
 
 VescUart UART;
 
+SemaphoreHandle_t storeMutex = NULL;
+
 void storeValues();
+void resetBus();
 
 void setup() {
     pinMode(FIELDCOIL_PIN, OUTPUT);
@@ -77,7 +84,8 @@ void setup() {
 
     digitalWrite(FIELDCOIL_PIN, LOW);
     digitalWrite(BEEPER_PIN, LOW);
-    digitalWrite(RELAIS_PIN, HIGH);
+
+    storeMutex = xSemaphoreCreateMutex();
 
     Serial2.begin(115200);
     Serial.begin(115200);
@@ -86,6 +94,7 @@ void setup() {
     while (!Serial2) ; //VESC
 
     UART.setSerialPort(&Serial2);
+
     digitalWrite(BEEPER_PIN, HIGH);
     delay(3);
     digitalWrite(BEEPER_PIN, LOW);
@@ -108,11 +117,136 @@ void setup() {
     delay(6);
     digitalWrite(BEEPER_PIN, LOW);
 
-    Wire.onRequest(storeValues);
+    Serial.println("waiting for vesc comm");
+    while (!UART.getVescValues()) {
+        delay(100);
+    }
+
+    Serial.println("waiting for pre charge voltage");
+    while (UART.data.inpVoltage < BATTERY_CELLS * LOW_VOLTAGE - PRE_CHARGE_DROPOFF) {
+        UART.getVescValues();
+        delay(100);
+    }
+    Serial.println("turning on");
+
+    digitalWrite(RELAIS_PIN, HIGH);
+
+    digitalWrite(BEEPER_PIN, HIGH);
+    delay(6);
+    digitalWrite(BEEPER_PIN, LOW);
+
+    Wire.onRequest(gotRequest);
     Serial.println(Wire.begin(I2C_ADDRESS, SDA_PIN, SCL_PIN, 400000L));
 }
 
-void storeValues(){
+void gotRequest() {
+    Serial.println("Got rq");
+    storeValues();
+
+}
+
+void resetBus(){
+    Serial.println("performing proper reset");
+    DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG,DPORT_I2C_EXT0_RST); //reset hardware
+    DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG,DPORT_I2C_EXT0_CLK_EN);
+    DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG,DPORT_I2C_EXT0_RST);//  release reset
+    I2C0.ctr.val = 0;
+    I2C0.ctr.ms_mode = 1;
+    I2C0.ctr.sda_force_out = 1 ;
+    I2C0.ctr.scl_force_out = 1 ;
+    I2C0.ctr.clk_en = 1;
+    I2C0.fifo_conf.fifo_addr_cfg_en = 0;
+
+    //the max clock number of receiving  a data
+    I2C0.timeout.tout = 400000L;//clocks max=1048575
+    //disable apb nonfifo access
+    I2C0.fifo_conf.nonfifo_en = 0;
+
+    I2C0.slave_addr.val = I2C_ADDRESS;
+    I2C0.slave_addr.en_10bit = false;
+
+    uint32_t period = (APB_CLK_FREQ/400000L) / 2;
+    uint32_t halfPeriod = period/2;
+    uint32_t quarterPeriod = period/4;
+
+    //the clock num during SCL is low level
+    I2C0.scl_low_period.period = period;
+    //the clock num during SCL is high level
+    I2C0.scl_high_period.period = period;
+
+    //the clock num between the negedge of SDA and negedge of SCL for start mark
+    I2C0.scl_start_hold.time = halfPeriod;
+    //the clock num between the posedge of SCL and the negedge of SDA for restart mark
+    I2C0.scl_rstart_setup.time = halfPeriod;
+
+    //the clock num after the STOP bit's posedge
+    I2C0.scl_stop_hold.time = halfPeriod;
+    //the clock num between the posedge of SCL and the posedge of SDA
+    I2C0.scl_stop_setup.time = halfPeriod;
+
+    //the clock num I2C used to hold the data after the negedge of SCL.
+    I2C0.sda_hold.time = quarterPeriod;
+    //the clock num I2C used to sample data on SDA after the posedge of SCL
+    I2C0.sda_sample.time = quarterPeriod;
+
+    I2C0.int_ena.val = (I2C_RXFIFO_FULL_INT_ENA_M | I2C_TRANS_COMPLETE_INT_ENA_M);
+    Serial.println("ending");
+    Wire.end();
+    Serial.print("ended");
+    if (Wire.begin(SDA_PIN, SCL_PIN, 400000L) == ESP_OK) {
+        Serial.println("master mode init worked");
+    }
+    Serial.print("begun");
+    Wire.end();
+    Serial.print("ended");
+    while(!Wire.begin(I2C_ADDRESS, SDA_PIN, SCL_PIN, 400000L));
+    Serial.print("begun");
+
+
+
+    uint8_t sda = SDA_PIN;
+    uint8_t scl = SCL_PIN;
+
+    digitalWrite(sda,HIGH);
+    digitalWrite(scl,HIGH);
+    pinMode(sda,PULLUP|OPEN_DRAIN|OUTPUT|INPUT);
+    pinMode(scl,PULLUP|OPEN_DRAIN|OUTPUT|INPUT);
+
+
+    if(!digitalRead(sda)||!digitalRead(scl)){ // bus in busy state
+        log_e("invalid state sda=%d, scl=%d\n",digitalRead(sda),digitalRead(scl));
+        digitalWrite(sda,HIGH);
+        digitalWrite(scl,HIGH);
+        delayMicroseconds(5);
+        digitalWrite(sda,LOW);
+        for(uint8_t a=0; a<9;a++){
+            delayMicroseconds(5);
+            digitalWrite(scl,LOW);
+            delayMicroseconds(5);
+            digitalWrite(scl,HIGH);
+        }
+        delayMicroseconds(5);
+        digitalWrite(sda,HIGH);
+    }
+
+    digitalWrite(sda, HIGH);
+    pinMode(sda, OPEN_DRAIN | PULLUP | INPUT | OUTPUT );
+    pinMatrixOutAttach(sda, I2CEXT0_SDA_OUT_IDX, false, false);
+    pinMatrixInAttach(sda, I2CEXT0_SDA_OUT_IDX, false);
+
+    digitalWrite(scl, HIGH);
+    pinMode(scl, OPEN_DRAIN | PULLUP | INPUT | OUTPUT);
+    pinMatrixOutAttach(scl, I2CEXT0_SCL_OUT_IDX, false, false);
+    pinMatrixInAttach(scl, I2CEXT0_SCL_OUT_IDX, false);
+}
+
+
+void storeValues() {
+    if( xSemaphoreTake( storeMutex, portMAX_DELAY ) != pdTRUE ){
+        Serial.println("mutex unavailable");
+        return;
+    }
+
     const int baseInputVoltage = 2;
     const int baseMotorTemp = -20;
     const int AhFactor = 10;
@@ -142,7 +276,22 @@ void storeValues(){
         msg[msgLen] += msg[i];
     }
 
+    static int busBusyCycles = 0;
+    if (I2C0.status_reg.bus_busy) {
+        if (busBusyCycles > 50){
+            resetBus();
+            busBusyCycles = 0;
+        }
+        busBusyCycles++;
+
+    }
+    else {
+        busBusyCycles = 0;
+    }
+
     Wire.slaveWrite(msg, sizeof(msg));
+
+    xSemaphoreGive( storeMutex );
 }
 
 void fault() {

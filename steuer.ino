@@ -361,7 +361,7 @@ void loop() {
         }
     }
 
-    if(millis()-lastValues > 10000){
+    if(millis()-lastValues > 30000){
         digitalWrite(BEEPER_PIN, HIGH);
         if(!DEBUG){
             digitalWrite(RELAIS_PIN, LOW);

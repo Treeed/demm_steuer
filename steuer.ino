@@ -145,39 +145,6 @@ void storeValues(){
     Wire.slaveWrite(msg, sizeof(msg));
 }
 
-
-
-void PrintValues() {
-
-    if (millis() - previousMillisPrint > 500) {
-        previousMillisPrint = millis();
-
-        Serial.print("Distance: ");
-        Serial.println(UART.data.tachometerAbs);
-        /*
-          Serial.print("Speed: ");
-          /*
-          Serial.print("RPM: ");
-          Serial.println(UART.data.rpm);
-          Serial.print("Spannung: ");
-          Serial.println(UART.data.inpVoltage);
-          Serial.print("Ah: ");
-          Serial.println(UART.data.ampHours);
-          Serial.print("Distance: ");
-          Serial.println(UART.data.tachometerAbs);
-          Serial.print("Speed: ");
-          Serial.println(UART.data.tachometer);
-          Serial.print("CurrentRAW: ");
-          Serial.println(analogRead(THROTTLE_PIN));
-          //Serial.print("CurrentIn: ");
-          //Serial.println(current);
-        */
-        Serial.print("Distance in Km: ");
-        Serial.println(distance);
-
-    }
-}
-
 void fault() {
     if (millis() - previousMillisFault > FAULT_TIME) {
         UART.setCurrent(float(0));
